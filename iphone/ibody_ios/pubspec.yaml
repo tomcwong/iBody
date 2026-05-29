@@ -1,0 +1,52 @@
+name: ibody_ios
+description: iBody - Professional Body Health Monitor for iPhone
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.11.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # State Management
+  flutter_riverpod: ^2.5.1
+
+  # Camera & Sensor (PPG heart rate / SpO2)
+  camera: ^0.10.5+9
+  image_picker: ^1.1.2
+
+  # Bluetooth (smart thermometers, BP cuffs)
+  flutter_blue_plus: ^1.31.13
+
+  # Apple HealthKit Integration
+  health: ^10.2.0
+
+  # Charts & Visualization
+  fl_chart: ^0.68.0
+
+  # UI Enhancements
+  shimmer: ^3.0.0
+  smooth_page_indicator: ^1.1.0
+
+  # Local Storage
+  shared_preferences: ^2.3.2
+  sqflite: ^2.3.3+1
+  path: ^1.9.0
+  path_provider: ^2.1.4
+
+  # Utilities
+  permission_handler: ^11.3.1
+  intl: ^0.19.0
+  uuid: ^4.5.0
+  wakelock_plus: ^1.1.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

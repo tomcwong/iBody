@@ -1,0 +1,95 @@
+name: iOS Build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    name: Build iOS App
+    runs-on: macos-latest
+
+    steps:
+      # 1. Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Set up Flutter
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.2'
+          channel: 'stable'
+          cache: true
+
+      # 3. Print Flutter & Dart version
+      - name: Flutter version info
+        working-directory: iphone/ibody_ios
+        run: flutter --version
+
+      # 4. Install dependencies
+      - name: Get Flutter packages
+        working-directory: iphone/ibody_ios
+        run: flutter pub get
+
+      # 5. Analyze for errors
+      - name: Analyze code
+        working-directory: iphone/ibody_ios
+        run: flutter analyze --no-fatal-infos
+
+      # 6. Run unit tests
+      - name: Run tests
+        working-directory: iphone/ibody_ios
+        run: flutter test
+
+      # 7. Build iOS (no code signing — generates .app bundle)
+      #    For a signed IPA you must add your certificates via Fastlane or
+      #    GitHub Actions secrets (APPLE_CERTIFICATE, APPLE_PROVISION_PROFILE etc.)
+      - name: Build iOS release (unsigned)
+        working-directory: iphone/ibody_ios
+        run: |
+          flutter build ios \
+            --release \
+            --no-codesign \
+            --dart-define=FLUTTER_APP_NAME="iBody"
+
+      # 8. Create unsigned IPA from the .app bundle
+      - name: Package .app into IPA (unsigned)
+        run: |
+          mkdir -p iphone/ibody_ios/build/ios/Payload
+          cp -r "iphone/ibody_ios/build/ios/iphoneos/Runner.app" \
+                "iphone/ibody_ios/build/ios/Payload/"
+          cd iphone/ibody_ios/build/ios
+          zip -r iBody-unsigned.ipa Payload/
+          echo "IPA created at: iphone/ibody_ios/build/ios/iBody-unsigned.ipa"
+
+      # 9. Upload build artifact
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: iBody-iOS-unsigned
+          path: iphone/ibody_ios/build/ios/iBody-unsigned.ipa
+          retention-days: 14
+
+      # 10. Upload build logs on failure
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: iphone/ibody_ios/build/
+          retention-days: 5
+
+# ─── SIGNED RELEASE (uncomment + add GitHub Secrets when ready) ────────────
+# To distribute via TestFlight or App Store, add these secrets in:
+# GitHub → Settings → Secrets → Actions
+#   APPLE_CERTIFICATE        - Base64-encoded .p12 distribution certificate
+#   APPLE_CERTIFICATE_PWD    - Certificate password
+#   APPLE_PROVISION_PROFILE  - Base64-encoded .mobileprovision
+#   APP_STORE_CONNECT_KEY    - Base64-encoded AuthKey_XXXXXXXX.p8
+#   APP_STORE_CONNECT_KEY_ID - Key ID from App Store Connect
+#   APP_STORE_CONNECT_ISSUER - Issuer ID from App Store Connect
+# Then replace step 7 with Fastlane or xcodebuild with signing.
