@@ -164,8 +164,11 @@ class PPGService {
       cmnd[lag] = (runningSum > 0) ? d[lag] * lag / runningSum : 1.0;
     }
 
-    // Pick the first local minimum below threshold → fundamental period
-    const threshold = 0.15;
+    // Pick the first local minimum below threshold → fundamental period.
+    // Threshold raised to 0.20 (vs standard 0.15) because camera PPG is
+    // noisier than microphone/piezo inputs and the true dip often sits
+    // just above 0.15, causing the fallback to land on the octave instead.
+    const threshold = 0.20;
     int bestLag = -1;
     for (int lag = minLag; lag < maxLag; lag++) {
       if (cmnd[lag] < threshold &&
@@ -185,6 +188,15 @@ class PPGService {
           bestLag = lag;
         }
       }
+    }
+
+    // Octave correction: if we landed in the lower-BPM half of the search
+    // range (lag > 30 ≈ 60 BPM), check if half that lag also has a low CMND
+    // value. If it does, the half-lag is almost certainly the true period and
+    // the chosen lag is its double (a classic octave error).
+    final halfLag = bestLag ~/ 2;
+    if (halfLag >= minLag && cmnd[halfLag] < 0.35) {
+      bestLag = halfLag;
     }
 
     return (60.0 * _sampleRate / bestLag).clamp(40.0, 150.0);
