@@ -121,17 +121,51 @@ class PPGService {
   }
 
   double _calculateBPM(List<double> signal) {
-    if (signal.length < 30) return _simulatedBPM();
-    final filtered = _bandpassFilter(signal);
-    final peaks = _findPeaks(filtered);
-    if (peaks.length < 2) return _simulatedBPM();
+    if (signal.length < 60) return _simulatedBPM();
 
-    final intervals = <double>[];
-    for (int i = 1; i < peaks.length; i++) {
-      intervals.add((peaks[i] - peaks[i - 1]) / _sampleRate);
+    // Step 1: smooth with moving average to kill camera noise & breathing artifacts
+    final smoothed = _movingAverage(signal, 5);
+
+    // Step 2: remove DC offset and slow drift (detrend around mean)
+    final mean = smoothed.reduce((a, b) => a + b) / smoothed.length;
+    final detrended = smoothed.map((s) => s - mean).toList();
+
+    // Step 3: autocorrelation — finds the TRUE repeating period of the heartbeat.
+    // This is immune to sub-peaks and harmonics that fool simple peak-detection.
+    // Search lag range for 40–150 BPM at 30 fps:
+    //   150 BPM → period = 30*60/150 = 12 samples
+    //    40 BPM → period = 30*60/40  = 45 samples
+    final minLag = (_sampleRate * 60 / 150).round(); // 12
+    final maxLag = (_sampleRate * 60 / 40).round();  // 45
+    final n = detrended.length;
+
+    double maxCorr = double.negativeInfinity;
+    int bestLag = minLag;
+
+    for (int lag = minLag; lag <= maxLag && lag < n; lag++) {
+      double corr = 0;
+      for (int i = 0; i < n - lag; i++) {
+        corr += detrended[i] * detrended[i + lag];
+      }
+      corr /= (n - lag); // normalise by number of pairs
+      if (corr > maxCorr) {
+        maxCorr = corr;
+        bestLag = lag;
+      }
     }
-    final avgInterval = intervals.reduce((a, b) => a + b) / intervals.length;
-    return (60.0 / avgInterval).clamp(40.0, 180.0);
+
+    return (60.0 * _sampleRate / bestLag).clamp(40.0, 150.0);
+  }
+
+  /// Smooth signal with a centered moving-average window.
+  List<double> _movingAverage(List<double> signal, int window) {
+    final half = window ~/ 2;
+    return List.generate(signal.length, (i) {
+      final start = (i - half).clamp(0, signal.length - 1);
+      final end = (i + half + 1).clamp(0, signal.length);
+      final slice = signal.sublist(start, end);
+      return slice.reduce((a, b) => a + b) / slice.length;
+    });
   }
 
   double _calculateSpO2(List<double> red, List<double> blue) {
@@ -144,31 +178,6 @@ class PPGService {
     final ratio = (redAC / redDC) / (blueAC / blueDC);
     final spo2 = 110.0 - 25.0 * ratio;
     return spo2.clamp(85.0, 100.0);
-  }
-
-  List<double> _bandpassFilter(List<double> signal) {
-    final result = <double>[];
-    const alpha = 0.85;
-    double prev = signal[0];
-    for (final s in signal) {
-      final filtered = alpha * prev + (1 - alpha) * s;
-      result.add(s - filtered);
-      prev = filtered;
-    }
-    return result;
-  }
-
-  List<int> _findPeaks(List<double> signal) {
-    final peaks = <int>[];
-    const minPeakDist = 15;
-    for (int i = 1; i < signal.length - 1; i++) {
-      if (signal[i] > signal[i - 1] && signal[i] > signal[i + 1]) {
-        if (peaks.isEmpty || i - peaks.last >= minPeakDist) {
-          peaks.add(i);
-        }
-      }
-    }
-    return peaks;
   }
 
   double _acComponent(List<double> signal) {
