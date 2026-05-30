@@ -1,5 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:health/health.dart';
 import '../models/vital_reading.dart';
+import '../services/health_service.dart';
 import '../services/storage_service.dart';
 
 class HealthState {
@@ -83,7 +85,21 @@ class HealthNotifier extends StateNotifier<HealthState> {
 
   Future<void> saveReading(VitalReading reading) async {
     await StorageService.instance.saveReading(reading);
+    _syncToHealthKit(reading);
     await _loadAll();
+  }
+
+  void _syncToHealthKit(VitalReading reading) {
+    final HealthDataType? hkType = switch (reading.type) {
+      VitalType.heartRate => HealthDataType.HEART_RATE,
+      VitalType.spo2 => HealthDataType.BLOOD_OXYGEN,
+      VitalType.temperature => HealthDataType.BODY_TEMPERATURE,
+      VitalType.weight => HealthDataType.WEIGHT,
+      _ => null,
+    };
+    if (hkType != null) {
+      HealthService.instance.writeReading(hkType, reading.value);
+    }
   }
 
   Future<void> refresh() => _loadAll();
