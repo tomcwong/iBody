@@ -45,6 +45,12 @@ class PPGService {
       );
       await _controller!.initialize();
       await _controller!.setFlashMode(FlashMode.torch);
+      // Lock exposure and focus so the DC level stays stable for the whole
+      // measurement. Auto-exposure ramps the signal by 30–50 counts over the
+      // first few seconds, which inflates the apparent AC component and breaks
+      // the SpO2 ratio calculation.
+      await _controller!.setExposureMode(ExposureMode.locked);
+      await _controller!.setFocusMode(FocusMode.locked);
       _isRunning = true;
       _controller!.startImageStream(_processFrame);
       return true;
@@ -229,8 +235,23 @@ class PPGService {
   }
 
   double _acComponent(List<double> signal) {
-    final mean = _dcComponent(signal);
-    return signal.map((s) => (s - mean).abs()).reduce((a, b) => a + b) / signal.length;
+    // Bandpass to cardiac range before computing AC amplitude.
+    // Raw MAD on the 30-s signal is dominated by camera auto-exposure drift
+    // and breathing (< 0.5 Hz), not the actual heartbeat. The bandpass isolates
+    // only 0.6–3 Hz (36–180 BPM) so the ratio reflects true pulsatile signal.
+    final filtered = _bandpass(signal);
+    if (filtered.isEmpty) return 0;
+    return filtered.map((s) => s.abs()).reduce((a, b) => a + b) / filtered.length;
+  }
+
+  List<double> _bandpass(List<double> signal) {
+    if (signal.length < 15) return signal;
+    // High-pass: subtract 15-sample MA (cutoff ≈ 0.64 Hz at 30 fps —
+    // removes DC and breathing/motion drift below that)
+    final lp = _movingAverage(signal, 15);
+    final hp = List.generate(signal.length, (i) => signal[i] - lp[i]);
+    // Light low-pass: 3-sample MA (cutoff ≈ 3.2 Hz — removes camera noise)
+    return _movingAverage(hp, 3);
   }
 
   double _dcComponent(List<double> signal) =>
