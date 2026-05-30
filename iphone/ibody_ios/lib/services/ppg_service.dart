@@ -123,34 +123,67 @@ class PPGService {
   double _calculateBPM(List<double> signal) {
     if (signal.length < 60) return _simulatedBPM();
 
-    // Step 1: smooth with moving average to kill camera noise & breathing artifacts
+    // Step 1: smooth to kill camera noise
     final smoothed = _movingAverage(signal, 5);
 
-    // Step 2: remove DC offset and slow drift (detrend around mean)
+    // Step 2: detrend (remove DC + slow breathing drift)
     final mean = smoothed.reduce((a, b) => a + b) / smoothed.length;
-    final detrended = smoothed.map((s) => s - mean).toList();
+    final x = smoothed.map((s) => s - mean).toList();
+    final n = x.length;
 
-    // Step 3: autocorrelation — finds the TRUE repeating period of the heartbeat.
-    // This is immune to sub-peaks and harmonics that fool simple peak-detection.
-    // Search lag range for 40–150 BPM at 30 fps:
-    //   150 BPM → period = 30*60/150 = 12 samples
-    //    40 BPM → period = 30*60/40  = 45 samples
-    final minLag = (_sampleRate * 60 / 150).round(); // 12
-    final maxLag = (_sampleRate * 60 / 40).round();  // 45
-    final n = detrended.length;
+    // Step 3: YIN algorithm — solves the octave error that plain autocorrelation suffers.
+    //
+    // Problem with autocorrelation: R(T) == R(2T) for a periodic signal, so the
+    // algorithm can pick 2×T (half the BPM) instead of the true period T.
+    //
+    // YIN fix: compute the squared DIFFERENCE function d[lag] = Σ(x[i]-x[i+lag])²
+    // then apply Cumulative Mean Normalization so earlier (smaller) periods are
+    // always preferred over their octave multiples. We then pick the FIRST dip
+    // below a threshold — that is always the fundamental period, never 2×T.
+    //
+    // Search: 40–150 BPM at 30 fps → lags 12–45 samples
+    final minLag = (_sampleRate * 60 / 150).round(); // 12 → 150 BPM cap
+    final maxLag = (_sampleRate * 60 / 40).round();  // 45 →  40 BPM floor
 
-    double maxCorr = double.negativeInfinity;
-    int bestLag = minLag;
-
-    for (int lag = minLag; lag <= maxLag && lag < n; lag++) {
-      double corr = 0;
+    // Difference function
+    final d = List<double>.filled(maxLag + 1, 0);
+    for (int lag = 1; lag <= maxLag && lag < n; lag++) {
+      double sum = 0;
       for (int i = 0; i < n - lag; i++) {
-        corr += detrended[i] * detrended[i + lag];
+        final diff = x[i] - x[i + lag];
+        sum += diff * diff;
       }
-      corr /= (n - lag); // normalise by number of pairs
-      if (corr > maxCorr) {
-        maxCorr = corr;
+      d[lag] = sum;
+    }
+
+    // Cumulative Mean Normalized Difference (CMND)
+    final cmnd = List<double>.filled(maxLag + 1, 1.0);
+    double runningSum = 0;
+    for (int lag = 1; lag <= maxLag; lag++) {
+      runningSum += d[lag];
+      cmnd[lag] = (runningSum > 0) ? d[lag] * lag / runningSum : 1.0;
+    }
+
+    // Pick the first local minimum below threshold → fundamental period
+    const threshold = 0.15;
+    int bestLag = -1;
+    for (int lag = minLag; lag < maxLag; lag++) {
+      if (cmnd[lag] < threshold &&
+          cmnd[lag] <= cmnd[lag - 1] &&
+          cmnd[lag] <= cmnd[lag + 1]) {
         bestLag = lag;
+        break;
+      }
+    }
+
+    // Fallback: absolute minimum in range (noisy/weak signal)
+    if (bestLag == -1) {
+      double minVal = double.infinity;
+      for (int lag = minLag; lag <= maxLag; lag++) {
+        if (cmnd[lag] < minVal) {
+          minVal = cmnd[lag];
+          bestLag = lag;
+        }
       }
     }
 
