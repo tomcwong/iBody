@@ -119,9 +119,9 @@ class _SpO2ScreenState extends ConsumerState<SpO2Screen> {
                 padding: const EdgeInsets.all(16),
                 child: const InstructionRow(
                   steps: [
-                    '1. Flip phone face-down. Cover the MAIN (wide) lens — on iPhone 13 that is the larger lens on the left side of the camera block',
-                    '2. Press firmly so no light leaks in — the flashlight turns on automatically',
-                    '3. Keep completely still for 30 seconds until the bar fills',
+                    '1. Open your iPhone Camera app and check which lens shows "1x" (not 0.5x). That is the lens to use.',
+                    '2. Flip phone face-down. Press your fingertip firmly and flat over the 1x lens so the flashlight turns on and no light leaks around the edges.',
+                    '3. Keep completely still for 30 seconds until the bar fills.',
                   ],
                   icon: Icons.water_drop_rounded,
                   color: AppColors.oxygenBlue,
