@@ -119,9 +119,9 @@ class _SpO2ScreenState extends ConsumerState<SpO2Screen> {
                 padding: const EdgeInsets.all(16),
                 child: const InstructionRow(
                   steps: [
-                    '1. Place fingertip firmly over the rear camera lens',
-                    '2. Turn on the flashlight — keep covered fully',
-                    '3. Remain still for 30 seconds',
+                    '1. Flip phone face-down. Cover the MAIN (wide) lens — on iPhone 13 that is the larger lens on the left side of the camera block',
+                    '2. Press firmly so no light leaks in — the flashlight turns on automatically',
+                    '3. Keep completely still for 30 seconds until the bar fills',
                   ],
                   icon: Icons.water_drop_rounded,
                   color: AppColors.oxygenBlue,

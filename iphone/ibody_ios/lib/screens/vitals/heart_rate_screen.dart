@@ -149,9 +149,9 @@ class _HeartRateScreenState extends ConsumerState<HeartRateScreen> {
                 padding: const EdgeInsets.all(16),
                 child: const InstructionRow(
                   steps: [
-                    '1. Place your fingertip gently over the rear camera lens',
-                    '2. Keep your hand still for 30 seconds',
-                    '3. Ensure good lighting and slight pressure',
+                    '1. Flip phone face-down. Cover the MAIN (wide) lens — on iPhone 13 that is the larger lens on the left side of the camera block',
+                    '2. Press your fingertip gently but firmly over the lens so no light leaks in',
+                    '3. Keep completely still for 30 seconds until the bar fills',
                   ],
                   icon: Icons.camera_rear_rounded,
                   color: AppColors.heartRed,

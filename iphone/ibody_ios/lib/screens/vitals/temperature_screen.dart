@@ -51,7 +51,8 @@ class _TemperatureScreenState extends ConsumerState<TemperatureScreen> {
     final health = ref.watch(healthProvider);
     final history = health.history[VitalType.temperature] ?? [];
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final latestVal = _result ?? health.latestReadings[VitalType.temperature]?.value ?? 98.6;
+    final latestReading = health.latestReadings[VitalType.temperature];
+    final latestVal = _result ?? latestReading?.value;
 
     return Scaffold(
       backgroundColor: isDark ? AppColors.bgDark : AppColors.bgLight,
@@ -60,22 +61,45 @@ class _TemperatureScreenState extends ConsumerState<TemperatureScreen> {
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            // Current reading
-            Container(
-              decoration: BoxDecoration(
-                color: isDark ? AppColors.cardDark : AppColors.cardLight,
-                borderRadius: BorderRadius.circular(24),
-                boxShadow: [BoxShadow(color: AppColors.tempOrange.withValues(alpha: 0.1), blurRadius: 24, offset: const Offset(0, 6))],
+            // Current reading (only shown after a measurement exists)
+            if (latestVal != null)
+              Container(
+                decoration: BoxDecoration(
+                  color: isDark ? AppColors.cardDark : AppColors.cardLight,
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [BoxShadow(color: AppColors.tempOrange.withValues(alpha: 0.1), blurRadius: 24, offset: const Offset(0, 6))],
+                ),
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    VitalGauge(value: latestVal, minValue: 95, maxValue: 106, color: AppColors.tempOrange, label: 'Temperature', unit: '°F'),
+                    const SizedBox(height: 12),
+                    StatusChip(value: latestVal, type: VitalType.temperature),
+                  ],
+                ),
+              )
+            else
+              // No measurement yet — explain how this screen works
+              Container(
+                decoration: BoxDecoration(
+                  color: isDark ? AppColors.cardDark : AppColors.cardLight,
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  children: [
+                    Icon(Icons.thermostat_rounded, size: 56, color: AppColors.tempOrange.withValues(alpha: 0.6)),
+                    const SizedBox(height: 16),
+                    const Text('No measurement yet', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Temperature does NOT use the camera.\nEnter your reading from a thermometer below, or connect a Bluetooth smart thermometer.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.5),
+                    ),
+                  ],
+                ),
               ),
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                children: [
-                  VitalGauge(value: latestVal, minValue: 95, maxValue: 106, color: AppColors.tempOrange, label: 'Temperature', unit: '°F'),
-                  const SizedBox(height: 12),
-                  if (_result != null) StatusChip(value: _result!, type: VitalType.temperature),
-                ],
-              ),
-            ),
             const SizedBox(height: 20),
 
             // Method toggle
