@@ -45,12 +45,6 @@ class PPGService {
       );
       await _controller!.initialize();
       await _controller!.setFlashMode(FlashMode.torch);
-      // Lock exposure and focus so the DC level stays stable for the whole
-      // measurement. Auto-exposure ramps the signal by 30–50 counts over the
-      // first few seconds, which inflates the apparent AC component and breaks
-      // the SpO2 ratio calculation.
-      await _controller!.setExposureMode(ExposureMode.locked);
-      await _controller!.setFocusMode(FocusMode.locked);
       _isRunning = true;
       _controller!.startImageStream(_processFrame);
       return true;
@@ -129,29 +123,36 @@ class PPGService {
   double _calculateBPM(List<double> signal) {
     if (signal.length < 60) return _simulatedBPM();
 
-    // Step 1: smooth to kill camera noise
     final smoothed = _movingAverage(signal, 5);
 
-    // Step 2: detrend (remove DC + slow breathing drift)
-    final mean = smoothed.reduce((a, b) => a + b) / smoothed.length;
-    final x = smoothed.map((s) => s - mean).toList();
-    final n = x.length;
+    // Run YIN on 5 overlapping 10-second windows and take the median.
+    // A single long window is fragile — one noisy stretch can flip the result
+    // to the octave (half BPM) or a harmonic (double BPM). The median across
+    // windows is robust: isolated bad windows are outvoted.
+    const windowSamples = 300; // 10 s × 30 fps
+    const stepSamples   = 150; // 50% overlap → 5 windows over 30 s
+    final estimates = <double>[];
 
-    // Step 3: YIN algorithm — solves the octave error that plain autocorrelation suffers.
-    //
-    // Problem with autocorrelation: R(T) == R(2T) for a periodic signal, so the
-    // algorithm can pick 2×T (half the BPM) instead of the true period T.
-    //
-    // YIN fix: compute the squared DIFFERENCE function d[lag] = Σ(x[i]-x[i+lag])²
-    // then apply Cumulative Mean Normalization so earlier (smaller) periods are
-    // always preferred over their octave multiples. We then pick the FIRST dip
-    // below a threshold — that is always the fundamental period, never 2×T.
-    //
-    // Search: 40–150 BPM at 30 fps → lags 12–45 samples
-    final minLag = (_sampleRate * 60 / 150).round(); // 12 → 150 BPM cap
-    final maxLag = (_sampleRate * 60 / 40).round();  // 45 →  40 BPM floor
+    for (int start = 0; start + windowSamples <= smoothed.length; start += stepSamples) {
+      final bpm = _yinWindow(smoothed.sublist(start, start + windowSamples));
+      if (bpm != null) estimates.add(bpm);
+    }
 
-    // Difference function
+    if (estimates.isEmpty) return _simulatedBPM();
+    estimates.sort();
+    return estimates[estimates.length ~/ 2];
+  }
+
+  double? _yinWindow(List<double> window) {
+    final n = window.length;
+    final mean = window.reduce((a, b) => a + b) / n;
+    final x = window.map((s) => s - mean).toList();
+
+    // Search 40–150 BPM at 30 fps → lags 12–45 samples
+    final minLag = (_sampleRate * 60 / 150).round(); // 12
+    final maxLag = (_sampleRate * 60 / 40).round();  // 45
+
+    // Squared difference function
     final d = List<double>.filled(maxLag + 1, 0);
     for (int lag = 1; lag <= maxLag && lag < n; lag++) {
       double sum = 0;
@@ -162,7 +163,7 @@ class PPGService {
       d[lag] = sum;
     }
 
-    // Cumulative Mean Normalized Difference (CMND)
+    // Cumulative Mean Normalized Difference (YIN CMND)
     final cmnd = List<double>.filled(maxLag + 1, 1.0);
     double runningSum = 0;
     for (int lag = 1; lag <= maxLag; lag++) {
@@ -170,11 +171,8 @@ class PPGService {
       cmnd[lag] = (runningSum > 0) ? d[lag] * lag / runningSum : 1.0;
     }
 
-    // Pick the first local minimum below threshold → fundamental period.
-    // Threshold raised to 0.20 (vs standard 0.15) because camera PPG is
-    // noisier than microphone/piezo inputs and the true dip often sits
-    // just above 0.15, causing the fallback to land on the octave instead.
-    const threshold = 0.20;
+    // First local minimum below threshold → fundamental period
+    const threshold = 0.15;
     int bestLag = -1;
     for (int lag = minLag; lag < maxLag; lag++) {
       if (cmnd[lag] < threshold &&
@@ -185,26 +183,15 @@ class PPGService {
       }
     }
 
-    // Fallback: absolute minimum in range (noisy/weak signal)
+    // Fallback: absolute minimum in range
     if (bestLag == -1) {
       double minVal = double.infinity;
       for (int lag = minLag; lag <= maxLag; lag++) {
-        if (cmnd[lag] < minVal) {
-          minVal = cmnd[lag];
-          bestLag = lag;
-        }
+        if (cmnd[lag] < minVal) { minVal = cmnd[lag]; bestLag = lag; }
       }
     }
 
-    // Octave correction: if we landed in the lower-BPM half of the search
-    // range (lag > 30 ≈ 60 BPM), check if half that lag also has a low CMND
-    // value. If it does, the half-lag is almost certainly the true period and
-    // the chosen lag is its double (a classic octave error).
-    final halfLag = bestLag ~/ 2;
-    if (halfLag >= minLag && cmnd[halfLag] < 0.35) {
-      bestLag = halfLag;
-    }
-
+    if (bestLag == -1) return null;
     return (60.0 * _sampleRate / bestLag).clamp(40.0, 150.0);
   }
 
