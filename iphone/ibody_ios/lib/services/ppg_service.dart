@@ -125,10 +125,9 @@ class PPGService {
 
     final smoothed = _movingAverage(signal, 5);
 
-    // Run YIN on 5 overlapping 10-second windows and take the median.
-    // A single long window is fragile — one noisy stretch can flip the result
-    // to the octave (half BPM) or a harmonic (double BPM). The median across
-    // windows is robust: isolated bad windows are outvoted.
+    // Run spectral analysis on 5 overlapping 10-second windows and take the median.
+    // A single long window is fragile — one noisy stretch can corrupt the result.
+    // The median across windows is robust: isolated bad windows are outvoted.
     const windowSamples = 300; // 10 s × 30 fps
     const stepSamples   = 150; // 50% overlap → 5 windows over 30 s
     final estimates = <double>[];
@@ -144,43 +143,41 @@ class PPGService {
   }
 
   double? _yinWindow(List<double> window) {
-    final n = window.length;
-    final mean = window.reduce((a, b) => a + b) / n;
-    final x = window.map((s) => s - mean).toList();
+    // Bandpass to cardiac range before spectral analysis
+    final filtered = _bandpass(window);
+    final n = filtered.length;
+    if (n < 30) return null;
 
-    // Variance for normalization — reject flat/dead signals
-    final variance = x.map((v) => v * v).reduce((a, b) => a + b) / n;
-    if (variance < 1e-10) return null;
+    // Evaluate DFT power at 0.05-Hz steps across 0.6–2.5 Hz (36–150 BPM).
+    // Autocorrelation has an octave problem on camera PPG: the dicrotic notch
+    // creates a strong feature at T/2, so autocorr(T/2) beats autocorr(T) and
+    // the algorithm reports 2× the real BPM. DFT is immune — 60 BPM (1 Hz) and
+    // 120 BPM (2 Hz) occupy separate bins, so the fundamental heartbeat energy
+    // always peaks at the true HR frequency regardless of harmonics.
+    // Cost: 38 bins × 300 samples × 5 windows ≈ 57 k ops — negligible.
+    const minFreq = 0.6; // Hz → 36 BPM
+    const maxFreq = 2.5; // Hz → 150 BPM
+    const step    = 0.05;
 
-    // Search 40–150 BPM at 30 fps → lags 12–45 samples
-    final minLag = (_sampleRate * 60 / 150).round(); // 12
-    final maxLag = (_sampleRate * 60 / 40).round();  // 45
+    double bestPower = 0;
+    double bestFreq  = -1;
 
-    // Normalized autocorrelation: find the lag with highest correlation in the
-    // physiological range. This avoids the YIN CMND threshold problem — on noisy
-    // camera PPG the CMND rarely dips below 0.15, so the YIN fallback always picks
-    // the highest lag (= lowest BPM = 40). Autocorrelation has no threshold; a
-    // periodic component at the heartbeat period produces a clear peak at that lag,
-    // and lags at T/2 (half period) are negative (mean-subtracted sinusoid) so
-    // the octave error is naturally suppressed.
-    double bestCorr = -1.0;
-    int bestLag = -1;
-    for (int lag = minLag; lag <= maxLag; lag++) {
-      double sum = 0;
-      final terms = n - lag;
-      for (int i = 0; i < terms; i++) {
-        sum += x[i] * x[i + lag];
+    for (double freq = minFreq; freq <= maxFreq + step * 0.5; freq += step) {
+      double re = 0, im = 0;
+      for (int k = 0; k < n; k++) {
+        final angle = 2 * pi * freq * k / _sampleRate;
+        re += filtered[k] * cos(angle);
+        im += filtered[k] * sin(angle);
       }
-      final r = sum / (terms * variance);
-      if (r > bestCorr) {
-        bestCorr = r;
-        bestLag = lag;
+      final power = re * re + im * im;
+      if (power > bestPower) {
+        bestPower = power;
+        bestFreq  = freq;
       }
     }
 
-    // Require minimum correlation — a flat or fully random signal has no peak
-    if (bestLag == -1 || bestCorr < 0.1) return null;
-    return (60.0 * _sampleRate / bestLag).clamp(40.0, 150.0);
+    if (bestFreq < 0) return null;
+    return (bestFreq * 60.0).clamp(40.0, 150.0);
   }
 
   /// Smooth signal with a centered moving-average window.
