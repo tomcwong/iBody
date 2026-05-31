@@ -148,50 +148,38 @@ class PPGService {
     final mean = window.reduce((a, b) => a + b) / n;
     final x = window.map((s) => s - mean).toList();
 
+    // Variance for normalization — reject flat/dead signals
+    final variance = x.map((v) => v * v).reduce((a, b) => a + b) / n;
+    if (variance < 1e-10) return null;
+
     // Search 40–150 BPM at 30 fps → lags 12–45 samples
     final minLag = (_sampleRate * 60 / 150).round(); // 12
     final maxLag = (_sampleRate * 60 / 40).round();  // 45
 
-    // Squared difference function
-    final d = List<double>.filled(maxLag + 1, 0);
-    for (int lag = 1; lag <= maxLag && lag < n; lag++) {
-      double sum = 0;
-      for (int i = 0; i < n - lag; i++) {
-        final diff = x[i] - x[i + lag];
-        sum += diff * diff;
-      }
-      d[lag] = sum;
-    }
-
-    // Cumulative Mean Normalized Difference (YIN CMND)
-    final cmnd = List<double>.filled(maxLag + 1, 1.0);
-    double runningSum = 0;
-    for (int lag = 1; lag <= maxLag; lag++) {
-      runningSum += d[lag];
-      cmnd[lag] = (runningSum > 0) ? d[lag] * lag / runningSum : 1.0;
-    }
-
-    // First local minimum below threshold → fundamental period
-    const threshold = 0.15;
+    // Normalized autocorrelation: find the lag with highest correlation in the
+    // physiological range. This avoids the YIN CMND threshold problem — on noisy
+    // camera PPG the CMND rarely dips below 0.15, so the YIN fallback always picks
+    // the highest lag (= lowest BPM = 40). Autocorrelation has no threshold; a
+    // periodic component at the heartbeat period produces a clear peak at that lag,
+    // and lags at T/2 (half period) are negative (mean-subtracted sinusoid) so
+    // the octave error is naturally suppressed.
+    double bestCorr = -1.0;
     int bestLag = -1;
-    for (int lag = minLag; lag < maxLag; lag++) {
-      if (cmnd[lag] < threshold &&
-          cmnd[lag] <= cmnd[lag - 1] &&
-          cmnd[lag] <= cmnd[lag + 1]) {
+    for (int lag = minLag; lag <= maxLag; lag++) {
+      double sum = 0;
+      final terms = n - lag;
+      for (int i = 0; i < terms; i++) {
+        sum += x[i] * x[i + lag];
+      }
+      final r = sum / (terms * variance);
+      if (r > bestCorr) {
+        bestCorr = r;
         bestLag = lag;
-        break;
       }
     }
 
-    // Fallback: absolute minimum in range
-    if (bestLag == -1) {
-      double minVal = double.infinity;
-      for (int lag = minLag; lag <= maxLag; lag++) {
-        if (cmnd[lag] < minVal) { minVal = cmnd[lag]; bestLag = lag; }
-      }
-    }
-
-    if (bestLag == -1) return null;
+    // Require minimum correlation — a flat or fully random signal has no peak
+    if (bestLag == -1 || bestCorr < 0.1) return null;
     return (60.0 * _sampleRate / bestLag).clamp(40.0, 150.0);
   }
 
@@ -214,21 +202,27 @@ class PPGService {
     final greenDC = _dcComponent(green);
     if (redDC == 0 || greenDC == 0 || greenAC == 0) return 98.0;
     // R = (redAC/redDC) / (greenAC/greenDC)
-    // Empirical calibration for smartphone red/green camera PPG.
-    // At normal SpO2 (~97%) R ≈ 0.5; formula yields ~97.5%.
+    // Phone camera R values are much smaller than clinical red/NIR (0.5–1.0)
+    // because green is heavily absorbed by blood → larger AC/DC than red.
+    // Empirically R ≈ 0.1–0.5 on a white-torch phone camera; calibration
+    // adjusted so normal SpO2 (~97%) corresponds to R ≈ 0.2.
     final ratio = (redAC / redDC) / (greenAC / greenDC);
-    final spo2 = 110.0 - 25.0 * ratio;
+    if (kDebugMode) {
+      debugPrint('SpO2 ratio=$ratio  red AC/DC=${(redAC/redDC).toStringAsFixed(5)}'
+          '  green AC/DC=${(greenAC/greenDC).toStringAsFixed(5)}');
+    }
+    final spo2 = 102.0 - 23.0 * ratio;
     return spo2.clamp(85.0, 100.0);
   }
 
   double _acComponent(List<double> signal) {
-    // Bandpass to cardiac range before computing AC amplitude.
-    // Raw MAD on the 30-s signal is dominated by camera auto-exposure drift
-    // and breathing (< 0.5 Hz), not the actual heartbeat. The bandpass isolates
-    // only 0.6–3 Hz (36–180 BPM) so the ratio reflects true pulsatile signal.
+    // Bandpass to cardiac range, then compute RMS amplitude.
+    // RMS is more stable than mean-absolute for signals that have variable
+    // pulse shape; it also matches how perfusion index is defined in literature.
     final filtered = _bandpass(signal);
     if (filtered.isEmpty) return 0;
-    return filtered.map((s) => s.abs()).reduce((a, b) => a + b) / filtered.length;
+    final sumSq = filtered.map((v) => v * v).reduce((a, b) => a + b);
+    return sqrt(sumSq / filtered.length);
   }
 
   List<double> _bandpass(List<double> signal) {
